@@ -355,6 +355,10 @@ config RADIO_SI470X
 	bool "Silicon Labs Si470x FM Radio Receiver support"
 	depends on VIDEO_V4L2
 
+config I2C_SI4730
+	tristate "Silicon Labs Si4730 FM Radio Receiver support"
+	depends on I2C && VIDEO_V4L2
+
 config I2C_SI4763
 	tristate "Silicon Labs Si4763 AMFM Radio Transmitter support"
 	depends on I2C && VIDEO_V4L2

@@ -839,6 +839,9 @@ static struct i2c_board_info mxc_i2c1_board_info[] __initdata = {
 		.platform_data = (void *)&max11801_mode,
 		.irq = gpio_to_irq(SABRESD_TS_INT),
 	},
+	{
+		I2C_BOARD_INFO("si4730_i2c", 0x11),
+	},
 };
 
 static struct i2c_board_info mxc_i2c2_board_info[] __initdata = {
