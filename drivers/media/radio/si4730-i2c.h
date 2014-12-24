@@ -46,9 +46,13 @@
 #define SI4730_PWDN_NRESP		1
 #define SI4730_CMD_POWER_DOWN		0x11
 
-#define SI4730_CMD_FM_RSQ_STATUS	0x22
+#define SI4730_CMD_FM_TUNE_STATUS	0x22
+#define SI4730_FM_TUNE_STATUS_NARGS	1
+#define SI4730_FM_TUNE_STATUS_NRESP  8
+
+#define SI4730_CMD_FM_RSQ_STATUS	0x23
 #define SI4730_FM_RSQ_STATUS_NARGS	1
-#define SI4730_FM_RSQ_STATUS_NRESP  7
+#define SI4730_FM_RSQ_STATUS_NRESP  8
 
 #define SI4730_SET_PROP_NARGS		5
 #define SI4730_SET_PROP_NRESP		1
@@ -189,35 +193,6 @@ struct rds_info {
 	u32 enabled;
 };
 
-struct limiter_info {
-#define MAX_LIMITER_RELEASE_TIME	102390
-	u32 release_time;
-#define MAX_LIMITER_DEVIATION		90000
-	u32 deviation;
-	u32 enabled;
-};
-
-struct pilot_info {
-#define MAX_PILOT_DEVIATION		90000
-	u32 deviation;
-#define MAX_PILOT_FREQUENCY		19000
-	u32 frequency;
-	u32 enabled;
-};
-
-struct acomp_info {
-#define MAX_ACOMP_RELEASE_TIME		1000000
-	u32 release_time;
-#define MAX_ACOMP_ATTACK_TIME		5000
-	u32 attack_time;
-#define MAX_ACOMP_THRESHOLD		0
-#define MIN_ACOMP_THRESHOLD		(-40)
-	s32 threshold;
-#define MAX_ACOMP_GAIN			20
-	u32 gain;
-	u32 enabled;
-};
-
 #define SI4763_NUM_SUPPLIES		2
 
 /*
@@ -230,10 +205,7 @@ struct si4730_device {
 	struct mutex mutex;
 	struct completion work;
 	struct rds_info rds_info;
-	struct limiter_info limiter_info;
-	struct pilot_info pilot_info;
-	struct acomp_info acomp_info;
-	struct regulator_bulk_data supplies[SI4763_NUM_SUPPLIES];
+
 	int gpio_reset;
 	u32 frequency;
 	u32 preemphasis;

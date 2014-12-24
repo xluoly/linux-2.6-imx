@@ -31,6 +31,7 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-common.h>
+#include <media/tavarua.h>
 
 #include "si4730-i2c.h"
 
@@ -44,6 +45,44 @@
 static int debug = 1;
 module_param(debug, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Debug level (0 - 2)");
+
+
+/**************************************************************************
+ * Module Parameters
+ **************************************************************************/
+
+/* Spacing (kHz) */
+/* 0: 200 kHz (USA, Australia) */
+/* 1: 100 kHz (Europe, Japan) */
+/* 2:  50 kHz */
+static unsigned short space = 2;
+module_param(space, ushort, 0444);
+MODULE_PARM_DESC(space, "Spacing: 0=200kHz 1=100kHz *2=50kHz*");
+
+/* Bottom of Band (MHz) */
+/* 0: 87.5 - 108 MHz (USA, Europe)*/
+/* 1: 76   - 108 MHz (Japan wide band) */
+/* 2: 76   -  90 MHz (Japan) */
+static unsigned short band = 1;
+module_param(band, ushort, 0444);
+MODULE_PARM_DESC(band, "Band: 0=87.5..108MHz *1=76..108MHz* 2=76..90MHz");
+
+/* De-emphasis */
+/* 0: 75 us (USA) */
+/* 1: 50 us (Europe, Australia, Japan) */
+static unsigned short de = 1;
+module_param(de, ushort, 0444);
+MODULE_PARM_DESC(de, "De-emphasis: 0=75us *1=50us*");
+
+/* Tune timeout */
+static unsigned int tune_timeout = 3000;
+module_param(tune_timeout, uint, 0644);
+MODULE_PARM_DESC(tune_timeout, "Tune timeout: *3000*");
+
+/* Seek timeout */
+static unsigned int seek_timeout = 5000;
+module_param(seek_timeout, uint, 0644);
+MODULE_PARM_DESC(seek_timeout, "Seek timeout: *5000*");
 
 
 /* Radio Nr */
@@ -120,6 +159,15 @@ static int radio_nr = -1;
 #define DBG_BUFFER(device, message, buffer, size)
 #endif
 
+struct tune_status {
+    int band_limit;
+    int afc;
+    int valid_channel;
+    int frequency;
+    int rssi;
+    int snr;
+    int ant_cap;
+};
 
 /*
  * si4730_send_command - sends a command to si4713 and waits its response
@@ -155,15 +203,14 @@ static int si4730_send_command(struct si4730_device *sdev, const u8 command,
 	}
 
 	/* Wait response from interrupt */
-/*
+    /*
 	if (!wait_for_completion_timeout(&sdev->work,
 				usecs_to_jiffies(usecs) + 1))
 		v4l2_warn(&sdev->sd,
 				"(%s) Device took too much time to answer.\n",
 				__func__);
 
-*/
-
+    */
 
 	/* Then get the response */
 	i = 0;
@@ -239,87 +286,6 @@ static int si4730_write_property(struct si4730_device *sdev, u16 prop, u16 val)
 
 	return rval;
 }
-
-#if 0
-static int si4713_enable_digitalout(struct si4730_device *sdev)
-{
-	int rval;
-	u8 resp[SI4730_SET_PROP_NRESP];
-	/*
-	*      .First byte = 0
-	*      .Second byte = property's MSB
-	*      .Third byte = property's LSB
-	*      .Fourth byte = value's MSB
-	*      .Fifth byte = value's LSB
-	*/
-	const u8 args[SI4713_EN_DIGITALOUT_NARGS] = {
-		10,
-		10,
-		12,
-		0,
-	};
-
-	rval = si4730_send_command(sdev, SI4713_CMD_EN_DIGITALOUT,
-		args, ARRAY_SIZE(args),
-		resp, ARRAY_SIZE(resp),
-		DEFAULT_TIMEOUT);
-
-	if (rval < 0)
-		return rval;
-
-
-	/*
-	* As there is no command response for SET_PROPERTY,
-	* wait Tcomp time to finish before proceed, in order
-	 * to have property properly set.
-	*/
-	msleep(TIMEOUT_SET_PROPERTY);
-
-	return rval;
-}
-
-static int si4713_get_digitalout(struct si4730_device *sdev, u32 *response)
-{
-	int rval;
-	u8 resp[5];
-	u16 temp1, temp2;
-
-	/*
-	 *      .First byte = 0
-	*      .Second byte = property's MSB
-	 *      .Third byte = property's LSB
-	*      .Fourth byte = value's MSB
-	*      .Fifth byte = value's LSB
-	*/
-	const u8 args[SI4713_EN_DIGITALOUT_NARGS] = {
-		0,
-		0,
-		0,
-		0,
-	};
-
-	rval = si4730_send_command(sdev, SI4713_CMD_EN_DIGITALOUT,
-		args, ARRAY_SIZE(args),
-		resp, ARRAY_SIZE(resp),
-		DEFAULT_TIMEOUT);
-
-	if (rval < 0)
-		return rval;
-
-	temp1 = compose_u16(resp[1], resp[2]);
-	temp2 = compose_u16(resp[3], resp[4]);
-	*response = compose_u32(temp1, temp2);
-	/*
-	* As there is no command response for SET_PROPERTY,
-	* wait Tcomp time to finish before proceed, in order
-	* to have property properly set.
-	*/
-	msleep(TIMEOUT_SET_PROPERTY);
-
-	return rval;
-}
-#endif
-
 
 /*
  * si4730_powerup - Powers the device up
@@ -433,6 +399,10 @@ static int si4730_wait_stc(struct si4730_device *sdev, const int usecs)
 	int err;
 	u8 resp[SI4730_GET_STATUS_NRESP];
 
+    unsigned long timeout;
+    const unsigned long sleep_time = 200;
+    int cnt;
+
 	/* Wait response from STC interrupt */
     /*
 	if (!wait_for_completion_timeout(&sdev->work,
@@ -441,34 +411,39 @@ static int si4730_wait_stc(struct si4730_device *sdev, const int usecs)
 			"%s: device took too much time to answer (%d usec).\n",
 				__func__, usecs);
 	*/
-
-	/* Clear status bits */
-	err = si4730_send_command(sdev, SI4730_CMD_GET_INT_STATUS,
+    cnt = seek_timeout / sleep_time;
+	do {
+        timeout = jiffies + msecs_to_jiffies(sleep_time);
+    	while (time_before(jiffies, timeout)) {
+            schedule();
+        }
+		/* Clear status bits */
+	    err = si4730_send_command(sdev, SI4730_CMD_GET_INT_STATUS,
 					NULL, 0,
 					resp, ARRAY_SIZE(resp),
 					DEFAULT_TIMEOUT);
 
-	if (err < 0)
-		goto exit;
+    	if (err < 0)
+    		goto exit;
 
-	dev_dbg(&sdev->client->dev,
-			"%s: status bits: 0x%02x\n", __func__, resp[0]);
-
-	if (!(resp[0] & SI4730_STC_INT))
-		err = -EIO;
+        --cnt;
+	} while (((resp[0] & SI4730_STC_INT) == 0) && (cnt > 0));
+    
+    if ((err == 0) && (cnt == 0))
+	    err = -EAGAIN;
 
 exit:
 	return err;
 }
 
 /*
- * si4730_tx_tune_freq - Sets the state of the RF carrier and sets the tuning
+ * si4730_rx_tune_freq - Sets the state of the RF carrier and sets the tuning
  *			frequency between 76 and 108 MHz in 10 kHz units and
  *			steps of 50 kHz.
  * @sdev: si4713_device structure for the device we are communicating
  * @frequency: desired frequency (76 - 108 MHz, unit 10 KHz, step 50 kHz)
  */
-static int si4730_tx_tune_freq(struct si4730_device *sdev, u16 frequency)
+static int si4730_rx_tune_freq(struct si4730_device *sdev, u16 frequency)
 {
 	int err;
 	u8 val[SI4730_TXFREQ_NRESP];
@@ -525,6 +500,25 @@ static int si4730_set_seek(struct si4730_device *radio,
 
 	return si4730_wait_stc(radio, TIMEOUT_RX_TUNE);
 }
+
+static int si4730_cancel_seek(struct si4730_device *sdev)
+{
+	int err;
+	u8 val[SI4730_FM_TUNE_STATUS_NRESP];
+	/*
+	*	.First byte = intack bit
+	 */
+	const u8 args[SI4730_FM_TUNE_STATUS_NARGS] = {
+		0x03,
+	};
+
+	err = si4730_send_command(sdev, SI4730_CMD_FM_TUNE_STATUS,
+				  args, ARRAY_SIZE(args), val,
+				  ARRAY_SIZE(val), DEFAULT_TIMEOUT);
+
+	return err;
+}
+
 /*
  * si4713_tx_tune_measure - Enters receive mode and measures the received noise
  *			level in units of dBuV on the selected frequency.
@@ -574,7 +568,33 @@ static int si4713_tx_tune_measure(struct si4730_device *sdev, u16 frequency,
 	return si4730_wait_stc(sdev, TIMEOUT_RX_TUNE);
 }
 
-static int si4763_fm_rsq_status(struct si4730_device *sdev,
+static int si4730_tune_status(struct si4730_device *sdev,
+        struct tune_status *status)
+{
+	int err;
+	u8 val[SI4730_FM_TUNE_STATUS_NRESP];
+	/*
+	*	.First byte = intack bit
+	 */
+	const u8 args[SI4730_FM_TUNE_STATUS_NARGS] = {
+		0x01,
+	};
+
+	err = si4730_send_command(sdev, SI4730_CMD_FM_TUNE_STATUS,
+				  args, ARRAY_SIZE(args), val,
+				  ARRAY_SIZE(val), DEFAULT_TIMEOUT);
+
+    status->band_limit = val[1] >> 7;
+    status->afc= (val[1] >> 1) & 0x01;
+    status->valid_channel = val[1] & 0x01;
+	status->frequency = compose_u16(val[2], val[3]);
+    status->rssi = val[4];
+    status->snr = val[5];
+    status->ant_cap = val[7];
+	return err;
+}
+
+static int si4730_fm_rsq_status(struct si4730_device *sdev,
 					u16 *frequency)
 {
 	int err;
@@ -641,17 +661,7 @@ exit:
 static int si4730_setup(struct si4730_device *sdev)
 {
 	int rval;
-    /*
-	u32 temp;
-	rval = si4730_write_property(sdev, 0x0202, 0xBB80);
-	if (rval < 0)
-		goto exit;
-
-	rval = si4730_write_property(sdev, 0x0203, 0x0400);
-	if (rval < 0)
-		goto exit;
-        */
-	rval = si4730_tx_tune_freq(sdev, 9420);
+	rval = si4730_rx_tune_freq(sdev, 9420);
 	if (rval < 0)
 		goto exit;
 
@@ -708,9 +718,8 @@ unlock:
 	return rval;
 }
 
-
 /* V4L2 vidioc */
-static int vidioc_querycap(struct file *file, void  *priv,
+static int si4730_querycap(struct file *file, void  *priv,
 					struct v4l2_capability *v)
 {
 	struct si4730_device *radio = video_drvdata(file);
@@ -721,47 +730,86 @@ static int vidioc_querycap(struct file *file, void  *priv,
 	snprintf(v->bus_info, sizeof(v->bus_info),
 		 "I2C:%s", dev_name(&videodev->dev));
 	v->version = RADIO_VERSION;
-	v->capabilities = V4L2_CAP_TUNER | V4L2_CAP_RADIO;
+	v->capabilities = V4L2_CAP_HW_FREQ_SEEK | V4L2_CAP_TUNER | V4L2_CAP_RADIO;
 	return 0;
 }
 
-/* si4730_g_frequency - get tuner or modulator radio frequency */
-static int si4730_g_frequency(struct file *file, void *priv,
-		struct v4l2_frequency *f)
+static int si4730_g_tuner(struct file *file, void *priv,
+		struct v4l2_tuner *tuner)
 {
-
 	struct si4730_device *sdev = video_drvdata(file);
-	int rval = 0;
+    struct tune_status status;
+	int rval = -1;
 
-	f->type = V4L2_TUNER_RADIO;
+	tuner->type = V4L2_TUNER_RADIO;
+    tuner->capability = V4L2_TUNER_CAP_LOW | V4L2_TUNER_CAP_STEREO |
+                        V4L2_TUNER_CAP_RDS | V4L2_TUNER_CAP_RDS_BLOCK_IO;
+    tuner->rangelow  = 8750;
+    tuner->rangehigh = 10800;
+    tuner->audmode = V4L2_TUNER_MODE_STEREO;
+
+    /* If there is a reliable method of detecting an RDS channel,
+     * then this code should check for that before setting this
+     * RDS subchannel. */
+    tuner->rxsubchans |= V4L2_TUNER_SUB_RDS;
 
 	mutex_lock(&sdev->mutex);
 
 	if (sdev->power_state) {
-		u16 freq;
-
-		rval = si4763_fm_rsq_status(sdev, &freq);
+		rval = si4730_tune_status(sdev, &status);
 		if (rval < 0)
 			goto unlock;
 
-		sdev->frequency = freq;
+        tuner->signal = status.rssi;
+        tuner->afc = status.afc;
 	}
-
-	f->frequency = sdev->frequency;
 
 unlock:
 	mutex_unlock(&sdev->mutex);
+    if (rval < 0)
+        dev_warn(&sdev->videodev->dev, "get tuner failed with %d\n", rval);
+
+	return rval;
+}
+
+/* si4730_g_frequency - get tuner or modulator radio frequency */
+static int si4730_g_frequency(struct file *file, void *priv,
+		struct v4l2_frequency *freq)
+{
+	struct si4730_device *sdev = video_drvdata(file);
+    struct tune_status status;
+	int rval = -1;
+
+	freq->type = V4L2_TUNER_RADIO;
+
+	mutex_lock(&sdev->mutex);
+
+	if (sdev->power_state) {
+		rval = si4730_tune_status(sdev, &status);
+		if (rval < 0)
+			goto unlock;
+
+		sdev->frequency = status.frequency;
+	}
+
+	freq->frequency = sdev->frequency;
+
+unlock:
+	mutex_unlock(&sdev->mutex);
+    if (rval < 0)
+        dev_warn(&sdev->videodev->dev, "get frequency failed with %d\n", rval);
+
 	return rval;
 }
 
 /* si4730_s_frequency - set tuner or modulator radio frequency */
 static int si4730_s_frequency(struct file *file, void *priv,
-	struct v4l2_frequency *f)
+	struct v4l2_frequency *freq)
 
 {
 	struct si4730_device *sdev = video_drvdata(file);
 	int rval = 0;
-	u16 frequency = f->frequency;
+	u16 frequency = freq->frequency;
 
 	/* Check frequency range */
 	if (frequency < FREQ_RANGE_LOW || frequency > FREQ_RANGE_HIGH)
@@ -775,7 +823,7 @@ static int si4730_s_frequency(struct file *file, void *priv,
 	mutex_lock(&sdev->mutex);
 
 	if (sdev->power_state) {
-		rval = si4730_tx_tune_freq(sdev, frequency);
+		rval = si4730_rx_tune_freq(sdev, frequency);
 		if (rval < 0)
         {
 			goto unlock;
@@ -784,7 +832,7 @@ static int si4730_s_frequency(struct file *file, void *priv,
 		rval = 0;
 	}
 	sdev->frequency = frequency;
-	f->frequency = frequency;
+	freq->frequency = frequency;
 
 unlock:
 	mutex_unlock(&sdev->mutex);
@@ -819,6 +867,9 @@ static int si4730_s_ctrl(struct file *file, void *priv,
 
     case V4L2_CID_TUNE_PREEMPHASIS:
         return 0;
+
+    case V4L2_CID_PRIVATE_TAVARUA_SRCHON:
+        return si4730_cancel_seek(radio);
 	}
 	return -EINVAL;
 }
@@ -893,7 +944,6 @@ int si4730_fops_release(struct file *file)
 	return retval;
 }
 
-
 /*
  * si4730_fops - file operations interface
  * video_ioctl2 is part of the v4l2 implementations. Change this pointer to the
@@ -912,7 +962,8 @@ static const struct v4l2_file_operations si4730_fops = {
  * si4730_ioctl_ops - video device ioctl operations
  */
 static const struct v4l2_ioctl_ops si4730_ioctl_ops = {
-	.vidioc_querycap        = vidioc_querycap,
+	.vidioc_querycap        = si4730_querycap,
+    .vidioc_g_tuner         = si4730_g_tuner,
 	.vidioc_g_frequency     = si4730_g_frequency,
 	.vidioc_s_frequency     = si4730_s_frequency,
 	.vidioc_g_ctrl          = si4730_g_ctrl,
@@ -929,7 +980,7 @@ struct video_device si4730_viddev_template = {
 	.name                   = "si4730_i2c",
 	.release                = video_device_release,
 	.ioctl_ops              = &si4730_ioctl_ops,
-	.debug                  = V4L2_DEBUG_IOCTL | V4L2_DEBUG_IOCTL_ARG,
+//	.debug                  = V4L2_DEBUG_IOCTL | V4L2_DEBUG_IOCTL_ARG,
 };
 
 
@@ -965,20 +1016,6 @@ static int si4730_probe(struct i2c_client *client,
 	memcpy(sdev->videodev, &si4730_viddev_template,
 			sizeof(si4730_viddev_template));
 	video_set_drvdata(sdev->videodev, sdev);
-/*
-	if (client->irq) {
-		rval = request_irq(client->irq,
-			si4713_handler, IRQF_TRIGGER_FALLING | IRQF_DISABLED,
-			client->name, sdev);
-		if (rval < 0) {
-			v4l2_err(&sdev->sd, "Could not request IRQ\n");
-			goto put_reg;
-		}
-		v4l2_dbg(1, debug, &sdev->sd, "IRQ requested.\n");
-	} else {
-		v4l2_warn(&sdev->sd, "IRQ not configured. Using timeouts.\n");
-	}
-*/
 
 	rval = si4730_initialize(sdev);
 	if (rval < 0) {
