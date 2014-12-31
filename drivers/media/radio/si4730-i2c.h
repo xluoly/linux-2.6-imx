@@ -54,13 +54,17 @@
 #define SI4730_FM_RSQ_STATUS_NARGS	1
 #define SI4730_FM_RSQ_STATUS_NRESP  8
 
+#define SI4730_CMD_FM_RDS_STATUS	0x24
+#define SI4730_FM_RDS_STATUS_NARGS	1
+#define SI4730_FM_RDS_STATUS_NRESP  13
+
 #define SI4730_SET_PROP_NARGS		5
 #define SI4730_SET_PROP_NRESP		1
 #define SI4730_CMD_SET_PROPERTY		0x12
 
-#define SI4713_GET_PROP_NARGS		3
-#define SI4713_GET_PROP_NRESP		4
-#define SI4713_CMD_GET_PROPERTY		0x13
+#define SI4730_GET_PROP_NARGS		3
+#define SI4730_GET_PROP_NRESP		4
+#define SI4730_CMD_GET_PROPERTY		0x13
 
 #define SI4730_GET_STATUS_NRESP		1
 #define SI4730_CMD_GET_INT_STATUS	0x14
@@ -203,8 +207,16 @@ struct si4730_device {
 	struct v4l2_subdev sd;
 	/* private data structures */
 	struct mutex mutex;
-	struct completion work;
 	struct rds_info rds_info;
+
+    /* RDS receive buffer */
+    struct delayed_work work;
+    wait_queue_head_t read_queue;
+    struct mutex lock;              /* buffer locking */
+    unsigned char *buffer;          /* size is always multiple of three */
+    unsigned int buf_size;
+    unsigned int rd_index;
+    unsigned int wr_index;
 
 	int gpio_reset;
 	u32 frequency;
@@ -216,6 +228,7 @@ struct si4730_device {
 	u32 stereo;
 	u32 tune_rnl;
 	u8 users;
+    u32 rds_on;
 	struct i2c_client *client;
 	struct video_device *videodev;
 };
